@@ -1,0 +1,40 @@
+# Результаты транскрибации (личные тексты)
+results/
+
+# Временные файлы обработки
+jobs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+
+# IDE и ОС
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Аудио и документы (не заливать случайно)
+*.mp3
+*.wav
+*.m4a
+*.txt
+*.doc
+*.docx
+*.pdf
+*.segments.json
+
+# Исключение: requirements.txt — это не результат, а список зависимостей
+!requirements.txt
+
+# Логи и локальные настройки
+*.log
+.env
+.env.local

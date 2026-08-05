@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transcribe — локальный транскрибатор</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="atmosphere" aria-hidden="true"></div>
+
+    <main class="shell">
+        <header class="brand">
+            <p class="brand-mark">Transcribe</p>
+            <h1>Локальный транскрибатор</h1>
+            <p class="lede">Аудио → текст → структура по спикерам и темам. Всё на вашем ПК.</p>
+        </header>
+
+        <section class="panel upload-panel" aria-labelledby="upload-title">
+            <h2 id="upload-title" class="visually-hidden">Загрузка</h2>
+
+            <div id="dropZone" class="drop-zone">
+                <div class="drop-copy">
+                    <p class="drop-title">Перетащите MP3, WAV или M4A</p>
+                    <p class="drop-sub">Длинные записи (2–3 часа) режутся автоматически</p>
+                </div>
+                <label for="audioFile" class="btn btn-primary">Выбрать файл</label>
+                <input type="file" id="audioFile" accept=".mp3,.wav,.m4a" hidden>
+            </div>
+
+            <div id="fileInfo" class="file-info" hidden>
+                <div><span>Файл</span><strong id="name">—</strong></div>
+                <div><span>Размер</span><strong id="size">—</strong></div>
+                <div><span>Длительность</span><strong id="duration">—</strong></div>
+            </div>
+
+            <fieldset class="mode-picker">
+                <legend>Скорость обработки</legend>
+                <div class="mode-options" role="radiogroup" aria-label="Скорость обработки">
+                    <label class="mode-option">
+                        <input type="radio" name="speedMode" value="fast">
+                        <span class="mode-card">
+                            <strong>Быстрее</strong>
+                            <small>модель tiny · чуть меньше точность</small>
+                        </span>
+                    </label>
+                    <label class="mode-option">
+                        <input type="radio" name="speedMode" value="accurate" checked>
+                        <span class="mode-card">
+                            <strong>Точнее</strong>
+                            <small>модель base · медленнее, но качественнее</small>
+                        </span>
+                    </label>
+                </div>
+            </fieldset>
+
+            <button id="startButton" class="btn btn-accent" disabled>Начать транскрибацию</button>
+
+            <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                <div id="progressBar">0%</div>
+            </div>
+
+            <div id="backgroundHint" class="hint" hidden>
+                Можете закрыть вкладку — обработка продолжится на сервере.
+                Готовый текст сохранится в папку <b>results</b>.
+            </div>
+        </section>
+
+        <section class="panel structure-panel" aria-labelledby="structure-title">
+            <div class="panel-head">
+                <h2 id="structure-title">Структура текста</h2>
+                <p>Разделение реплик по спикерам, абзацы и тематические блоки с заголовками.</p>
+            </div>
+
+            <div class="structure-grid">
+                <label class="field">
+                    <span>Число собеседников</span>
+                    <input type="number" id="speakerCount" min="1" max="8" value="2">
+                </label>
+                <label class="field field-grow">
+                    <span>Имена через запятую</span>
+                    <input type="text" id="speakerNames" placeholder="Анна, Иван">
+                </label>
+                <label class="field">
+                    <span>Длина темы, мин</span>
+                    <input type="number" id="topicMinutes" min="2" max="30" value="6">
+                </label>
+            </div>
+
+            <div class="toggles">
+                <label class="check">
+                    <input type="checkbox" id="thematicBlocks" checked>
+                    <span>Тематические блоки с заголовками</span>
+                </label>
+                <label class="check">
+                    <input type="checkbox" id="includeTimestamps">
+                    <span>Метки времени у реплик</span>
+                </label>
+            </div>
+
+            <button id="structureButton" class="btn btn-primary" disabled>Структурировать текст</button>
+        </section>
+
+        <section class="panel result-panel" aria-labelledby="result-title">
+            <div class="panel-head row">
+                <div>
+                    <h2 id="result-title">Результат</h2>
+                    <p id="resultMeta">Сначала получите транскрипт, затем структурируйте.</p>
+                </div>
+                <div class="tabs" role="tablist">
+                    <button type="button" class="tab is-active" data-view="raw" role="tab" aria-selected="true">Исходный</button>
+                    <button type="button" class="tab" data-view="structured" role="tab" aria-selected="false">Структура</button>
+                </div>
+            </div>
+
+            <textarea id="result" class="result-area" placeholder="Здесь появится текст..."></textarea>
+            <textarea id="structuredResult" class="result-area" placeholder="Структурированный текст появится здесь..." hidden></textarea>
+
+            <div id="structuredPreview" class="structured-preview" hidden></div>
+
+            <div class="actions">
+                <button id="copy" class="btn btn-ghost" type="button">Копировать</button>
+                <button id="txt" class="btn btn-ghost" type="button">TXT</button>
+                <button id="doc" class="btn btn-ghost" type="button">Word</button>
+                <button id="pdf" class="btn btn-ghost" type="button">PDF</button>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>
