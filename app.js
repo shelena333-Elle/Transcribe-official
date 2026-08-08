@@ -1,6 +1,7 @@
 const API_URL = "http://127.0.0.1:5000";
 const ACTIVE_JOB_KEY = "activeJobId";
 const SPEED_MODE_KEY = "speedMode";
+const THEME_KEY = "uiTheme";
 
 /** @type {{id:string,file:File,status:string,url:string,duration:string}[]} */
 let queue = [];
@@ -13,6 +14,8 @@ let activeJobId = null;
 let busy = false;
 let userStopped = false;
 let stopQueue = false;
+let dragFromId = null;
+
 const dropZone = document.getElementById("dropZone");
 const fileInput = document.getElementById("audioFile");
 const fileInfo = document.getElementById("fileInfo");
@@ -23,17 +26,26 @@ const durationField = document.getElementById("duration");
 const startButton = document.getElementById("startButton");
 const stopButton = document.getElementById("stopButton");
 const progressBar = document.getElementById("progressBar");
+const stickyLabel = document.getElementById("stickyLabel");
+const themeToggle = document.getElementById("themeToggle");
 const result = document.getElementById("result");
 const structuredResult = document.getElementById("structuredResult");
 const structuredPreview = document.getElementById("structuredPreview");
 const structureButton = document.getElementById("structureButton");
+const structurePanel = document.getElementById("structurePanel");
+const structureToggle = document.getElementById("structureToggle");
+const structureBody = document.getElementById("structureBody");
 const resultMeta = document.getElementById("resultMeta");
+const resultView = document.getElementById("resultView");
+const historyView = document.getElementById("historyView");
+const exportActions = document.getElementById("exportActions");
 const queuePanel = document.getElementById("queuePanel");
 const queueList = document.getElementById("queueList");
 const queueMeta = document.getElementById("queueMeta");
 const previewPanel = document.getElementById("previewPanel");
 const audioPreview = document.getElementById("audioPreview");
 const historyList = document.getElementById("historyList");
+const toastHost = document.getElementById("toastHost");
 
 fileInput.addEventListener("change", (e) => addFiles([...e.target.files]));
 fileInput.addEventListener("click", () => { fileInput.value = ""; });
@@ -57,6 +69,51 @@ function uid() {
     return Math.random().toString(36).slice(2, 10);
 }
 
+function toast(message, ms = 2600) {
+    if (!toastHost || !message) return;
+    const el = document.createElement("div");
+    el.className = "toast";
+    el.textContent = message;
+    toastHost.appendChild(el);
+    setTimeout(() => {
+        el.classList.add("is-out");
+        setTimeout(() => el.remove(), 250);
+    }, ms);
+}
+
+function initTheme() {
+    const saved = localStorage.getItem(THEME_KEY);
+    const theme = saved === "dark" || saved === "light"
+        ? saved
+        : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    applyTheme(theme);
+}
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem(THEME_KEY, theme);
+    if (themeToggle) {
+        themeToggle.textContent = theme === "dark" ? "Светлая" : "Тёмная";
+    }
+}
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute("data-theme") || "light";
+    applyTheme(current === "dark" ? "light" : "dark");
+}
+
+function setStructureOpen(open) {
+    structurePanel.classList.toggle("is-collapsed", !open);
+    structureBody.hidden = !open;
+    structureToggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function maybeOpenStructure() {
+    if (result.value.trim()) {
+        setStructureOpen(true);
+    }
+}
+
 function formatSize(bytes) {
     return (bytes / 1024 / 1024).toFixed(2) + " MB";
 }
@@ -76,7 +133,7 @@ function addFiles(files) {
         return;
     }
     if (accepted.length < files.length) {
-        alert("Часть файлов пропущена — нужны MP3, WAV или M4A");
+        toast("Часть файлов пропущена — нужны MP3, WAV или M4A");
     }
 
     for (const file of accepted) {
@@ -177,9 +234,10 @@ function clearSelectedOrQueue() {
         if (item.url) URL.revokeObjectURL(item.url);
     }
     clearQueueUI();
-    setProgress(0, "0%");
+    setProgress(0, "Готово к работе");
     showBackgroundHint(false);
     resultMeta.textContent = "Очередь очищена.";
+    toast("Очередь удалена");
 }
 
 function renderQueue() {
@@ -203,8 +261,10 @@ function renderQueue() {
             partial: "Частично",
         }[item.status] || item.status;
 
+        const canDrag = !busy && item.status === "waiting";
         return `
-            <li class="queue-item ${item.status === "active" ? "is-active" : ""} ${item.status === "done" || item.status === "partial" ? "is-done" : ""} ${item.status === "error" ? "is-error" : ""}" data-id="${item.id}">
+            <li class="queue-item ${item.status === "active" ? "is-active" : ""} ${item.status === "done" || item.status === "partial" ? "is-done" : ""} ${item.status === "error" ? "is-error" : ""}" data-id="${item.id}" draggable="${canDrag ? "true" : "false"}">
+                <span class="queue-handle" aria-hidden="true">⠿</span>
                 <div class="queue-item-main">
                     <span class="queue-item-name">${escapeHtml(item.file.name)}</span>
                     <span class="queue-item-meta">${formatSize(item.file.size)} · ${escapeHtml(item.duration)} · ${statusLabel}</span>
@@ -216,6 +276,23 @@ function renderQueue() {
             </li>
         `;
     }).join("");
+}
+
+function reorderQueue(fromId, toId) {
+    if (!fromId || !toId || fromId === toId || busy) return;
+    const from = queue.findIndex((q) => q.id === fromId);
+    const to = queue.findIndex((q) => q.id === toId);
+    if (from < 0 || to < 0) return;
+    if (queue[from].status !== "waiting" || queue[to].status !== "waiting") return;
+
+    const currentId = queue[currentQueueIndex]?.id;
+    const [moved] = queue.splice(from, 1);
+    queue.splice(to, 0, moved);
+    if (currentId) {
+        currentQueueIndex = queue.findIndex((q) => q.id === currentId);
+    }
+    renderQueue();
+    syncControls();
 }
 
 queueList.addEventListener("click", (e) => {
@@ -239,10 +316,51 @@ queueList.addEventListener("click", (e) => {
     }
 });
 
+queueList.addEventListener("dragstart", (e) => {
+    const row = e.target.closest(".queue-item");
+    if (!row || busy || row.getAttribute("draggable") !== "true") {
+        e.preventDefault();
+        return;
+    }
+    dragFromId = row.dataset.id;
+    row.classList.add("is-dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", dragFromId);
+});
+
+queueList.addEventListener("dragend", (e) => {
+    const row = e.target.closest(".queue-item");
+    row?.classList.remove("is-dragging");
+    queueList.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+    dragFromId = null;
+});
+
+queueList.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    const row = e.target.closest(".queue-item");
+    if (!row || row.dataset.id === dragFromId) return;
+    queueList.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+    row.classList.add("drag-over");
+    e.dataTransfer.dropEffect = "move";
+});
+
+queueList.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const row = e.target.closest(".queue-item");
+    const toId = row?.dataset.id;
+    const fromId = dragFromId || e.dataTransfer.getData("text/plain");
+    queueList.querySelectorAll(".drag-over").forEach((el) => el.classList.remove("drag-over"));
+    reorderQueue(fromId, toId);
+});
+
 function setProgress(percent, label) {
-    const value = Math.max(0, Math.min(100, percent));
+    const value = Math.max(0, Math.min(100, Number(percent) || 0));
     progressBar.style.width = value + "%";
-    progressBar.textContent = label || value + "%";
+    const text = label || (value ? value + "%" : "0%");
+    progressBar.textContent = value ? `${value}%` : "0%";
+    if (stickyLabel) {
+        stickyLabel.textContent = text;
+    }
 }
 
 function showBackgroundHint(visible) {
@@ -254,7 +372,8 @@ function sleep(ms) {
 }
 
 function activeTextarea() {
-    return currentView === "structured" ? structuredResult : result;
+    if (currentView === "structured") return structuredResult;
+    return result;
 }
 
 function syncStructureButton() {
@@ -272,7 +391,7 @@ function syncControls() {
     const showStop = hasQueue || busy || Boolean(activeJobId);
     stopButton.hidden = !showStop;
     stopButton.disabled = false;
-    stopButton.textContent = busy || activeJobId ? "Стоп" : "Удалить очередь";
+    stopButton.textContent = busy || activeJobId ? "Стоп" : "Удалить";
 
     dropZone.style.pointerEvents = busy ? "none" : "";
     dropZone.style.opacity = busy ? "0.7" : "";
@@ -319,6 +438,8 @@ function applyJobResult(data, { partial = false } = {}) {
     result.value = (data.text || "").trim();
     currentSegments = Array.isArray(data.segments) ? data.segments : [];
     syncStructureButton();
+    maybeOpenStructure();
+    if (currentView === "history") setView("raw");
 
     if (partial && result.value) {
         resultMeta.textContent = data.result_file
@@ -328,6 +449,7 @@ function applyJobResult(data, { partial = false } = {}) {
             ? `Остановлено. Уже распознанный текст сохранён в <b>results\\${data.result_file}</b>`
             : "Остановлено. Показан уже распознанный текст.";
         backgroundHint.hidden = false;
+        toast("Частичный текст сохранён");
     } else if (result.value) {
         resultMeta.textContent = currentSegments.length
             ? `Готово: ${currentSegments.length} сегментов. Можно структурировать.`
@@ -336,6 +458,7 @@ function applyJobResult(data, { partial = false } = {}) {
             backgroundHint.innerHTML =
                 `Готово! Текст также сохранён в файл: <b>results\\${data.result_file}</b>`;
             backgroundHint.hidden = false;
+            toast("Сохранено в results");
         }
     }
 }
@@ -574,11 +697,15 @@ async function startTranscription() {
             const doneCount = queue.filter((q) => q.status === "done").length;
             if (doneCount > 1) {
                 resultMeta.textContent = `Очередь завершена: ${doneCount} файл(ов). Показан последний результат.`;
+                toast(`Очередь завершена: ${doneCount} файл(ов)`);
+            } else if (doneCount === 1) {
+                toast("Транскрибация завершена");
             }
             setProgress(100, "Готово");
         } else if (!result.value) {
             setProgress(0, "Остановлено");
             resultMeta.textContent = "Очередь остановлена.";
+            toast("Остановлено");
         }
     } finally {
         activeXhr = null;
@@ -637,7 +764,7 @@ function escapeHtml(value) {
 async function structureText() {
     const text = result.value.trim();
     if (!text) {
-        alert("Сначала получите или вставьте текст транскрипта.");
+        toast("Сначала получите или вставьте текст");
         return;
     }
 
@@ -672,9 +799,10 @@ async function structureText() {
         resultMeta.textContent =
             `Структура: ${data.block_count || 0} блоков, ${data.turn_count || 0} реплик` +
             (data.result_file ? ` · сохранено в results\\${data.result_file}` : "");
+        toast("Структура готова");
         loadHistory();
     } catch (error) {
-        alert(error.message || "Не удалось структурировать");
+        toast(error.message || "Не удалось структурировать");
         resultMeta.textContent = "Не удалось структурировать текст.";
     } finally {
         syncStructureButton();
@@ -689,20 +817,30 @@ function setView(view) {
         tab.setAttribute("aria-selected", active ? "true" : "false");
     });
 
-    result.hidden = view !== "raw";
-    structuredResult.hidden = view !== "structured";
-    structuredPreview.hidden = view !== "structured" || !lastStructuredBlocks;
+    const showHistory = view === "history";
+    resultView.hidden = showHistory;
+    historyView.hidden = !showHistory;
+
+    if (!showHistory) {
+        result.hidden = view !== "raw";
+        structuredResult.hidden = view !== "structured";
+        structuredPreview.hidden = view !== "structured" || !lastStructuredBlocks;
+        exportActions.hidden = false;
+    } else {
+        loadHistory();
+    }
 }
 
 async function exportCurrent(format) {
     const text = activeTextarea().value.trim();
     if (!text) {
-        alert("Нет текста для выгрузки.");
+        toast("Нет текста для выгрузки");
         return;
     }
 
     if (format === "txt") {
         downloadBlob(new Blob([text], { type: "text/plain;charset=utf-8" }), "transcription.txt");
+        toast("TXT сохранён");
         return;
     }
 
@@ -726,8 +864,9 @@ async function exportCurrent(format) {
         const match = /filename="?([^"]+)"?/i.exec(disposition);
         const filename = match?.[1] || (format === "pdf" ? "transcription.pdf" : "transcription.docx");
         downloadBlob(blob, filename);
+        toast(format === "pdf" ? "PDF сохранён" : "Word сохранён");
     } catch (error) {
-        alert(error.message || "Не удалось выгрузить файл");
+        toast(error.message || "Не удалось выгрузить файл");
     }
 }
 
@@ -791,10 +930,12 @@ historyList.addEventListener("click", async (e) => {
         structuredPreview.hidden = true;
         setView("raw");
         syncStructureButton();
+        maybeOpenStructure();
         resultMeta.textContent = `Открыто из истории: ${name}`;
         showBackgroundHint(false);
+        toast("Файл открыт");
     } catch (error) {
-        alert(error.message || "Не удалось открыть файл");
+        toast(error.message || "Не удалось открыть файл");
     }
 });
 
@@ -806,19 +947,26 @@ async function cleanupCache() {
         const response = await fetch(`${API_URL}/cleanup`, { method: "POST" });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "Ошибка очистки");
-        alert(
-            `${data.message || "Готово"}\nУдалено папок jobs: ${data.removed_job_dirs || 0}\n` +
-            `Освобождено ≈ ${formatBytes(data.freed_bytes || 0)}`
+        toast(
+            `Кэш очищен · ${data.removed_job_dirs || 0} папок · ≈ ${formatBytes(data.freed_bytes || 0)}`
         );
     } catch (error) {
-        alert(error.message || "Не удалось очистить кэш");
+        toast(error.message || "Не удалось очистить кэш");
     }
 }
 
 startButton.addEventListener("click", startTranscription);
 stopButton.addEventListener("click", stopOrClear);
 structureButton.addEventListener("click", structureText);
-result.addEventListener("input", syncStructureButton);
+structureToggle.addEventListener("click", () => {
+    const open = structurePanel.classList.contains("is-collapsed");
+    setStructureOpen(open);
+});
+themeToggle.addEventListener("click", toggleTheme);
+result.addEventListener("input", () => {
+    syncStructureButton();
+    if (result.value.trim()) maybeOpenStructure();
+});
 document.getElementById("refreshHistory").addEventListener("click", loadHistory);
 document.getElementById("cleanupButton").addEventListener("click", cleanupCache);
 
@@ -826,16 +974,29 @@ document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => setView(tab.dataset.view));
 });
 
-document.getElementById("copy").addEventListener("click", () => {
-    navigator.clipboard.writeText(activeTextarea().value);
+document.getElementById("copy").addEventListener("click", async () => {
+    const text = activeTextarea().value;
+    if (!text.trim()) {
+        toast("Нечего копировать");
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(text);
+        toast("Скопировано");
+    } catch (_) {
+        toast("Не удалось скопировать");
+    }
 });
 
 document.getElementById("txt").addEventListener("click", () => exportCurrent("txt"));
 document.getElementById("doc").addEventListener("click", () => exportCurrent("docx"));
 document.getElementById("pdf").addEventListener("click", () => exportCurrent("pdf"));
 
+initTheme();
 initSpeedMode();
+setStructureOpen(false);
 syncControls();
+setProgress(0, "Готово к работе");
 checkServer();
 loadHistory();
 
