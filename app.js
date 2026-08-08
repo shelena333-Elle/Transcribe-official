@@ -25,9 +25,11 @@ const sizeField = document.getElementById("size");
 const durationField = document.getElementById("duration");
 const startButton = document.getElementById("startButton");
 const stopButton = document.getElementById("stopButton");
+const stopButtonSticky = document.getElementById("stopButtonSticky");
 const progressBar = document.getElementById("progressBar");
 const stickyLabel = document.getElementById("stickyLabel");
 const themeToggle = document.getElementById("themeToggle");
+const stopButtons = [stopButton, stopButtonSticky].filter(Boolean);
 const result = document.getElementById("result");
 const structuredResult = document.getElementById("structuredResult");
 const structuredPreview = document.getElementById("structuredPreview");
@@ -389,9 +391,12 @@ function syncControls() {
         : "Начать транскрибацию";
 
     const showStop = hasQueue || busy || Boolean(activeJobId);
-    stopButton.hidden = !showStop;
-    stopButton.disabled = false;
-    stopButton.textContent = busy || activeJobId ? "Стоп" : "Удалить";
+    const stopLabel = busy || activeJobId ? "Стоп" : "Удалить";
+    stopButtons.forEach((btn) => {
+        btn.hidden = !showStop;
+        btn.disabled = false;
+        btn.textContent = stopLabel;
+    });
 
     dropZone.style.pointerEvents = busy ? "none" : "";
     dropZone.style.opacity = busy ? "0.7" : "";
@@ -571,8 +576,10 @@ async function stopOrClear() {
 
     userStopped = true;
     stopQueue = true;
-    stopButton.disabled = true;
-    stopButton.textContent = "Остановка…";
+    stopButtons.forEach((btn) => {
+        btn.disabled = true;
+        btn.textContent = "Остановка…";
+    });
     setProgress(Math.max(5, parseInt(progressBar.style.width, 10) || 5), "Остановка…");
 
     if (activeXhr) {
@@ -956,7 +963,7 @@ async function cleanupCache() {
 }
 
 startButton.addEventListener("click", startTranscription);
-stopButton.addEventListener("click", stopOrClear);
+stopButtons.forEach((btn) => btn.addEventListener("click", stopOrClear));
 structureButton.addEventListener("click", structureText);
 structureToggle.addEventListener("click", () => {
     const open = structurePanel.classList.contains("is-collapsed");

@@ -21,7 +21,7 @@
                 </div>
             </div>
             <div class="sticky-actions">
-                <button id="stopButton" class="btn btn-danger btn-compact" type="button" hidden>Стоп</button>
+                <button id="stopButtonSticky" class="btn btn-danger btn-compact" type="button" hidden>Стоп</button>
                 <button id="themeToggle" class="btn btn-ghost btn-compact" type="button" aria-label="Переключить тему">Тема</button>
             </div>
         </div>
@@ -85,8 +85,9 @@
                 </div>
             </fieldset>
 
-            <div class="action-row action-row-single">
+            <div class="action-row">
                 <button id="startButton" class="btn btn-accent" disabled>Начать транскрибацию</button>
+                <button id="stopButton" class="btn btn-danger" type="button" hidden>Стоп</button>
             </div>
 
             <div id="backgroundHint" class="hint" hidden>
