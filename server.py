@@ -104,14 +104,43 @@ else:
         pass
 
 
+class JobCancelled(Exception):
+    """Задача остановлена пользователем."""
+
+
 def set_job(job_id, **fields):
     with jobs_lock:
-        jobs[job_id].update(fields)
+        if job_id in jobs:
+            jobs[job_id].update(fields)
 
 
 def get_job(job_id):
     with jobs_lock:
         return dict(jobs.get(job_id, {}))
+
+
+def is_cancelled(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id) or {}
+        return bool(job.get("cancel_requested")) or job.get("status") == "cancelled"
+
+
+def request_cancel(job_id):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        if not job:
+            return False, "not_found"
+        if job.get("status") in {"done", "error", "cancelled"}:
+            return False, job.get("status")
+        job["cancel_requested"] = True
+        job["status"] = "cancelling"
+        job["message"] = "Остановка..."
+        return True, "cancelling"
+
+
+def ensure_not_cancelled(job_id):
+    if is_cancelled(job_id):
+        raise JobCancelled("Остановлено пользователем")
 
 
 def begin_background_work():
@@ -193,7 +222,7 @@ def prepare_chunks(source_path, temp_dir):
     return chunks, duration, len(chunks)
 
 
-def transcribe_file(path, language, whisper_model, time_offset=0.0, beam_size=5):
+def transcribe_file(path, language, whisper_model, time_offset=0.0, beam_size=5, job_id=None):
     segments_iter, info = whisper_model.transcribe(
         path,
         language=language,
@@ -202,17 +231,73 @@ def transcribe_file(path, language, whisper_model, time_offset=0.0, beam_size=5)
     )
     segments = []
     texts = []
-    for segment in segments_iter:
-        text = segment.text.strip()
-        if not text:
-            continue
-        texts.append(text)
-        segments.append({
-            "start": round(segment.start + time_offset, 2),
-            "end": round(segment.end + time_offset, 2),
-            "text": text,
-        })
-    return " ".join(texts), segments, info.language
+    detected = getattr(info, "language", language)
+    try:
+        for segment in segments_iter:
+            if job_id:
+                ensure_not_cancelled(job_id)
+            text = segment.text.strip()
+            if not text:
+                continue
+            texts.append(text)
+            segments.append({
+                "start": round(segment.start + time_offset, 2),
+                "end": round(segment.end + time_offset, 2),
+                "text": text,
+            })
+    except JobCancelled:
+        # Сохраняем уже распознанное из текущего куска
+        if texts and job_id:
+            set_job(
+                job_id,
+                text=((get_job(job_id).get("text") or "") + " " + " ".join(texts)).strip(),
+                segments=(get_job(job_id).get("segments") or []) + segments,
+            )
+        raise
+    return " ".join(texts), segments, detected
+
+
+def save_partial_result(original_filename, job_id, parts, all_segments):
+    """Сохраняет уже распознанный текст при Стоп."""
+    full_text = " ".join(parts).strip()
+    if not full_text:
+        return None, None, full_text
+
+    result_name = safe_result_name(original_filename, job_id, suffix="_partial.txt")
+    result_path = RESULTS_DIR / result_name
+    result_path.write_text(full_text, encoding="utf-8")
+
+    segments_name = None
+    if all_segments:
+        segments_name = safe_result_name(
+            original_filename, job_id, suffix="_partial.segments.json"
+        )
+        (RESULTS_DIR / segments_name).write_text(
+            json.dumps(all_segments, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    return result_name, segments_name, full_text
+
+
+def finish_cancelled(job_id, original_filename, parts, all_segments):
+    result_name, segments_name, full_text = save_partial_result(
+        original_filename, job_id, parts, all_segments
+    )
+    set_job(
+        job_id,
+        status="cancelled",
+        message="Остановлено" + (" · частичный текст сохранён" if full_text else ""),
+        error="Остановлено пользователем",
+        text=full_text,
+        segments=all_segments,
+        result_file=result_name,
+        segments_file=segments_name,
+        partial=bool(full_text),
+    )
+    print(
+        f"Задача {job_id} остановлена"
+        + (f", частичный результат: {result_name}" if result_name else "")
+    )
 
 
 def process_job(job_id, source_path, language, original_filename, mode="accurate"):
@@ -221,20 +306,27 @@ def process_job(job_id, source_path, language, original_filename, mode="accurate
     model_name = resolve_model_size(mode)
     # tiny + меньший beam — быстрее на том же CPU
     beam_size = 1 if model_name == "tiny" else 5
+    parts = []
+    all_segments = []
 
     try:
+        ensure_not_cancelled(job_id)
         set_job(
             job_id,
             status="preparing",
             message=f"Подготовка файла (режим: {'быстрее' if mode == 'fast' else 'точнее'}, модель {model_name})...",
             mode=mode,
             model=model_name,
+            text="",
+            segments=[],
         )
 
         whisper = get_model(model_name)
+        ensure_not_cancelled(job_id)
         chunks, duration, total = prepare_chunks(source_path, temp_dir)
         minutes = int(duration // 60)
 
+        ensure_not_cancelled(job_id)
         set_job(
             job_id,
             status="processing",
@@ -247,11 +339,10 @@ def process_job(job_id, source_path, language, original_filename, mode="accurate
             ),
         )
 
-        parts = []
-        all_segments = []
         detected_language = language
 
         for index, chunk_path in enumerate(chunks, start=1):
+            ensure_not_cancelled(job_id)
             set_job(
                 job_id,
                 chunk=index,
@@ -265,11 +356,20 @@ def process_job(job_id, source_path, language, original_filename, mode="accurate
                 whisper,
                 time_offset=time_offset,
                 beam_size=beam_size,
+                job_id=job_id,
             )
             if text:
                 parts.append(text)
             all_segments.extend(segments)
 
+            # Промежуточный текст — видно в UI и пригодится при Стоп
+            set_job(
+                job_id,
+                text=" ".join(parts).strip(),
+                segments=list(all_segments),
+            )
+
+        ensure_not_cancelled(job_id)
         full_text = " ".join(parts)
         result_name = safe_result_name(original_filename, job_id)
         result_path = RESULTS_DIR / result_name
@@ -296,14 +396,77 @@ def process_job(job_id, source_path, language, original_filename, mode="accurate
 
         print(f"Готово: {result_name} ({len(all_segments)} сегментов, {model_name})")
 
+    except JobCancelled:
+        job_snap = get_job(job_id)
+        snap_text = (job_snap.get("text") or "").strip()
+        snap_segments = job_snap.get("segments") or all_segments
+        if snap_text and len(snap_text) >= len(" ".join(parts).strip()):
+            finish_cancelled(job_id, original_filename, [snap_text], snap_segments)
+        else:
+            finish_cancelled(job_id, original_filename, parts, all_segments)
+
     except Exception as exc:
-        set_job(job_id, status="error", error=str(exc), message="Ошибка")
-        print(f"Ошибка задачи {job_id}: {exc}")
+        if is_cancelled(job_id):
+            job_snap = get_job(job_id)
+            snap_text = (job_snap.get("text") or "").strip()
+            snap_segments = job_snap.get("segments") or all_segments
+            if snap_text and len(snap_text) >= len(" ".join(parts).strip()):
+                finish_cancelled(job_id, original_filename, [snap_text], snap_segments)
+            else:
+                finish_cancelled(job_id, original_filename, parts, all_segments)
+        else:
+            set_job(job_id, status="error", error=str(exc), message="Ошибка")
+            print(f"Ошибка задачи {job_id}: {exc}")
 
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
         shutil.rmtree(JOBS_DIR / job_id, ignore_errors=True)
         end_background_work()
+
+
+def list_result_files(limit=40):
+    items = []
+    for path in RESULTS_DIR.glob("*.txt"):
+        if path.name.endswith(".segments.json"):
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        items.append({
+            "name": path.name,
+            "size": stat.st_size,
+            "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            "partial": "_partial" in path.stem,
+        })
+    items.sort(key=lambda x: x["mtime"], reverse=True)
+    return items[:limit]
+
+
+def cleanup_cache():
+    removed_jobs = 0
+    freed = 0
+
+    if JOBS_DIR.exists():
+        for child in list(JOBS_DIR.iterdir()):
+            try:
+                if child.is_dir():
+                    size = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
+                    shutil.rmtree(child, ignore_errors=True)
+                    removed_jobs += 1
+                    freed += size
+                else:
+                    freed += child.stat().st_size
+                    child.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+    # Системный temp с нашими chunk_* — не трогаем агрессивно; только пустые метки
+    return {
+        "removed_job_dirs": removed_jobs,
+        "freed_bytes": freed,
+        "message": "Временные файлы jobs очищены. Папка results не тронута.",
+    }
 
 
 @app.route("/")
@@ -322,7 +485,10 @@ def health():
         },
         "chunk_minutes": CHUNK_SECONDS // 60,
         "results_dir": str(RESULTS_DIR),
-        "features": ["structure", "export", "speed_mode"],
+        "features": [
+            "structure", "export", "speed_mode", "cancel",
+            "partial", "history", "cleanup", "queue",
+        ],
     })
 
 
@@ -355,6 +521,7 @@ def transcribe():
             "filename": uploaded.filename,
             "mode": mode,
             "model": model_name,
+            "cancel_requested": False,
             "chunk": 0,
             "total": 0,
             "created": datetime.now().isoformat(timespec="seconds"),
@@ -382,6 +549,62 @@ def job_status(job_id):
     if not job:
         return jsonify({"error": "Задача не найдена"}), 404
     return jsonify(job)
+
+
+@app.route("/jobs/<job_id>/cancel", methods=["POST"])
+def cancel_job(job_id):
+    ok, state = request_cancel(job_id)
+    if state == "not_found":
+        return jsonify({"error": "Задача не найдена"}), 404
+    if not ok:
+        return jsonify({
+            "job_id": job_id,
+            "status": state,
+            "message": "Задачу уже нельзя остановить",
+        }), 409
+    return jsonify({
+        "job_id": job_id,
+        "status": "cancelling",
+        "message": "Остановка запрошена",
+    })
+
+
+@app.route("/results")
+def results_list():
+    return jsonify({"items": list_result_files()})
+
+
+@app.route("/results/<path:name>")
+def results_get(name):
+    safe = Path(name).name
+    if safe != name or not safe.endswith(".txt"):
+        abort(404)
+    path = RESULTS_DIR / safe
+    if not path.is_file():
+        return jsonify({"error": "Файл не найден"}), 404
+
+    segments = []
+    seg_path = RESULTS_DIR / (safe[:-4] + ".segments.json")
+    if seg_path.is_file():
+        try:
+            segments = json.loads(seg_path.read_text(encoding="utf-8"))
+        except Exception:
+            segments = []
+
+    return jsonify({
+        "name": safe,
+        "text": path.read_text(encoding="utf-8"),
+        "segments": segments,
+    })
+
+
+@app.route("/cleanup", methods=["POST"])
+def cleanup():
+    try:
+        info = cleanup_cache()
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(info)
 
 
 @app.route("/structure", methods=["POST"])

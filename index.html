@@ -25,10 +25,23 @@
             <div id="dropZone" class="drop-zone">
                 <div class="drop-copy">
                     <p class="drop-title">Перетащите MP3, WAV или M4A</p>
-                    <p class="drop-sub">Длинные записи (2–3 часа) режутся автоматически</p>
+                    <p class="drop-sub">Можно несколько файлов — очередь обработает по одному</p>
                 </div>
-                <label for="audioFile" class="btn btn-primary">Выбрать файл</label>
-                <input type="file" id="audioFile" accept=".mp3,.wav,.m4a" hidden>
+                <label for="audioFile" class="btn btn-primary">Выбрать файлы</label>
+                <input type="file" id="audioFile" accept=".mp3,.wav,.m4a" multiple hidden>
+            </div>
+
+            <div id="queuePanel" class="queue-panel" hidden>
+                <div class="queue-head">
+                    <h3>Очередь</h3>
+                    <span id="queueMeta" class="queue-meta">0 файлов</span>
+                </div>
+                <ul id="queueList" class="queue-list"></ul>
+            </div>
+
+            <div id="previewPanel" class="preview-panel" hidden>
+                <p class="preview-label">Прослушивание</p>
+                <audio id="audioPreview" class="audio-preview" controls preload="metadata"></audio>
             </div>
 
             <div id="fileInfo" class="file-info" hidden>
@@ -57,7 +70,10 @@
                 </div>
             </fieldset>
 
-            <button id="startButton" class="btn btn-accent" disabled>Начать транскрибацию</button>
+            <div class="action-row">
+                <button id="startButton" class="btn btn-accent" disabled>Начать транскрибацию</button>
+                <button id="stopButton" class="btn btn-danger" type="button" hidden>Стоп / Удалить</button>
+            </div>
 
             <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
                 <div id="progressBar">0%</div>
@@ -67,6 +83,22 @@
                 Можете закрыть вкладку — обработка продолжится на сервере.
                 Готовый текст сохранится в папку <b>results</b>.
             </div>
+        </section>
+
+        <section class="panel history-panel" aria-labelledby="history-title">
+            <div class="panel-head row">
+                <div>
+                    <h2 id="history-title">История</h2>
+                    <p>Готовые тексты из папки results</p>
+                </div>
+                <div class="history-actions">
+                    <button id="refreshHistory" class="btn btn-ghost" type="button">Обновить</button>
+                    <button id="cleanupButton" class="btn btn-ghost" type="button">Очистить кэш</button>
+                </div>
+            </div>
+            <ul id="historyList" class="history-list">
+                <li class="history-empty">Пока пусто — появятся после первой транскрибации.</li>
+            </ul>
         </section>
 
         <section class="panel structure-panel" aria-labelledby="structure-title">
